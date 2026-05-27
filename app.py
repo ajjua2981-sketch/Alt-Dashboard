@@ -9,6 +9,7 @@ import streamlit as st
 
 from api_client import lookup_alternate_drugs
 from config import API_CONFIG, EXPORT_CONFIG
+from log_parser import parse_log
 
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
@@ -21,10 +22,10 @@ st.set_page_config(
 # ── Custom CSS ────────────────────────────────────────────────────────────────
 st.markdown("""
 <style>
-.badge-Y { color:#fff; background:#28a745; padding:2px 10px; border-radius:4px; font-size:0.78rem; }
-.badge-N { color:#fff; background:#dc3545; padding:2px 10px; border-radius:4px; font-size:0.78rem; }
-.badge-G { color:#fff; background:#17a2b8; padding:2px 10px; border-radius:4px; font-size:0.78rem; }
-.badge-X { color:#212529; background:#ffc107; padding:2px 10px; border-radius:4px; font-size:0.78rem; }
+.badge-pass { color:#fff; background:#28a745; padding:3px 12px; border-radius:4px; font-size:0.82rem; font-weight:600; }
+.badge-fail { color:#fff; background:#dc3545; padding:3px 12px; border-radius:4px; font-size:0.82rem; font-weight:600; }
+.badge-noalt { color:#212529; background:#ffc107; padding:3px 12px; border-radius:4px; font-size:0.82rem; font-weight:600; }
+.badge-err  { color:#fff; background:#6c757d; padding:3px 12px; border-radius:4px; font-size:0.82rem; font-weight:600; }
 div[data-testid="metric-container"] { background:#f8f9fa; border-radius:8px; padding:12px; }
 .stDataFrame { font-size: 0.85rem; }
 </style>
@@ -48,25 +49,30 @@ with st.sidebar:
     st.markdown("**Instructions**")
     st.markdown("""
 1. Download the Excel template below
-2. Fill in your NDC values
+2. Paste your log entries into the **logTXT** column (one per row)
 3. Upload the completed file
-4. Click **Look Up Alternate Drugs**
-5. View results and export
+4. Click **Look Up & Compare**
+5. View Pass / Fail results and export
 """)
+
+    st.markdown("**Log message format detected:**")
+    st.code(
+        "Requested NDC: <NDC> Substituted with\n"
+        "Alternate NDC: <ALT_NDC> For DAW Code: <DAW>\n"
+        "Drug Source: <SRC> Substitution Indicator: <SI>",
+        language="text",
+    )
 
     st.divider()
 
     # ── Template download ─────────────────────────────────────────────────────
     st.markdown("**Download Input Template**")
-    template_df = pd.DataFrame(columns=["NDC", "DAW Code", "Substitution Indicator"])
+    template_df = pd.DataFrame(columns=["logTXT"])
     template_buffer = io.BytesIO()
     with pd.ExcelWriter(template_buffer, engine="openpyxl") as writer:
         template_df.to_excel(writer, index=False, sheet_name="Input")
-        # Auto-size columns
         worksheet = writer.sheets["Input"]
-        for col in worksheet.columns:
-            worksheet.column_dimensions[col[0].column_letter].width = 25
-        # Bold header row
+        worksheet.column_dimensions["A"].width = 80
         from openpyxl.styles import Font, PatternFill
         for cell in worksheet[1]:
             cell.font = Font(bold=True)
@@ -75,14 +81,18 @@ with st.sidebar:
     st.download_button(
         label="⬇️ Download Excel Template",
         data=template_buffer.getvalue(),
-        file_name="input_template.xlsx",
+        file_name="log_input_template.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
 
 # ── Main area ─────────────────────────────────────────────────────────────────
 st.title("💊 Alternate Drug Dashboard")
-st.caption("Upload an Excel file with NDC, DAW Code and Substitution Indicator to look up alternate drugs.")
+st.caption(
+    "Upload an Excel file with a **logTXT** column. "
+    "Each row is a log entry — the dashboard extracts NDC fields, "
+    "calls the API, and compares the API result against the log's expected alternate NDC."
+)
 
 st.divider()
 
@@ -90,212 +100,256 @@ st.divider()
 uploaded_file = st.file_uploader(
     "Upload Excel file (.xlsx)",
     type=["xlsx"],
-    help="Excel file must have columns: 'NDC', 'DAW Code', 'Substitution Indicator'",
+    help="Excel file must have a single column: 'logTXT'",
 )
 
 if uploaded_file:
     # ── Parse Excel ───────────────────────────────────────────────────────────
     try:
-        # Read the first sheet by default
         xl         = pd.ExcelFile(uploaded_file, engine="openpyxl")
         sheet_name = xl.sheet_names[0]
-
-        # If multiple sheets, let user pick
         if len(xl.sheet_names) > 1:
             sheet_name = st.selectbox(
                 "Multiple sheets found — select the input sheet:",
                 options=xl.sheet_names,
             )
-
         df_input = xl.parse(sheet_name)
         df_input.columns = df_input.columns.str.strip()
-
     except Exception as exc:
         st.error(f"Could not read Excel file: {exc}")
         st.stop()
 
-    # ── Validate required columns ─────────────────────────────────────────────
-    required_cols = {"NDC", "DAW Code", "Substitution Indicator"}
-    missing = required_cols - set(df_input.columns)
-    if missing:
+    # ── Validate column ───────────────────────────────────────────────────────
+    if "logTXT" not in df_input.columns:
         st.error(
-            f"Excel file is missing required columns: **{', '.join(missing)}**\n\n"
+            f"Excel file must have a **logTXT** column.\n\n"
             f"Found columns: {', '.join(df_input.columns.tolist())}\n\n"
-            f"Download the template from the sidebar to get the correct format."
+            "Download the template from the sidebar to get the correct format."
         )
         st.stop()
 
-    # ── Clean data ────────────────────────────────────────────────────────────
-    df_input["NDC"]                    = df_input["NDC"].astype(str).str.strip()
-    df_input["DAW Code"]               = df_input["DAW Code"].astype(str).str.strip()
-    df_input["Substitution Indicator"] = df_input["Substitution Indicator"].astype(str).str.strip()
+    df_input = df_input[["logTXT"]].copy()
+    df_input["logTXT"] = df_input["logTXT"].astype(str).str.strip()
+    df_input = df_input[df_input["logTXT"].str.len() > 0]
+    df_input = df_input[df_input["logTXT"] != "nan"].reset_index(drop=True)
 
-    # Drop empty rows
-    df_input = df_input[df_input["NDC"].str.len() > 0]
-    df_input = df_input[df_input["NDC"] != "nan"]
-    df_input = df_input.reset_index(drop=True)
-
-    total_records = len(df_input)
-
-    if total_records == 0:
-        st.warning("The uploaded file has no data rows. Please fill in the NDC values and re-upload.")
+    if len(df_input) == 0:
+        st.warning("The uploaded file has no data rows.")
         st.stop()
 
+    # ── Parse log entries ─────────────────────────────────────────────────────
+    parsed_rows = []
+    for _, row in df_input.iterrows():
+        result = parse_log(row["logTXT"])
+        if result:
+            parsed_rows.append({**result, "logTXT": row["logTXT"], "parse_ok": True})
+        else:
+            parsed_rows.append({
+                "requested_ndc": "", "log_alternate_ndc": "",
+                "daw_code": "", "drug_source": "", "substitution_indicator": "",
+                "logTXT": row["logTXT"], "parse_ok": False,
+            })
+
+    df_parsed = pd.DataFrame(parsed_rows)
+    total       = len(df_parsed)
+    parse_ok    = df_parsed["parse_ok"].sum()
+    parse_fail  = total - parse_ok
+
     # ── Preview ───────────────────────────────────────────────────────────────
-    st.subheader("📂 Uploaded File Preview")
-    col_prev, col_info = st.columns([3, 1])
-    with col_prev:
-        st.dataframe(df_input, use_container_width=True, height=220)
-    with col_info:
-        st.metric("Total Records",  total_records)
-        num_batches = -(-total_records // API_CONFIG["batch_size"])
-        st.metric("API Calls Needed", num_batches)
-        st.metric("Batch Size", API_CONFIG["batch_size"])
+    st.subheader("📂 Parsed Log Preview")
+
+    pm1, pm2, pm3 = st.columns(3)
+    pm1.metric("Total Rows", total)
+    pm2.metric("✅ Parsed OK", int(parse_ok))
+    pm3.metric("⚠️ Parse Failed", int(parse_fail))
+
+    if parse_fail > 0:
+        st.warning(
+            f"{int(parse_fail)} row(s) did not contain the expected substitution message "
+            "and will be skipped during API lookup."
+        )
+
+    preview_df = df_parsed[df_parsed["parse_ok"]].reset_index(drop=True)[[
+        "requested_ndc", "log_alternate_ndc", "daw_code", "drug_source", "substitution_indicator"
+    ]].rename(columns={
+        "requested_ndc":          "Requested NDC",
+        "log_alternate_ndc":      "Log: Expected Alt NDC",
+        "daw_code":               "DAW Code",
+        "drug_source":            "Drug Source",
+        "substitution_indicator": "Substitution Indicator",
+    })
+
+    st.dataframe(preview_df, use_container_width=True, height=220)
 
     st.divider()
 
     # ── Lookup button ─────────────────────────────────────────────────────────
-    if st.button("🔍 Look Up Alternate Drugs", type="primary", use_container_width=True):
-        drugs = [
-            {
-                "ndc":                   row["NDC"],
-                "dawCode":               row["DAW Code"],
-                "substitutionIndicator": row["Substitution Indicator"],
-            }
-            for _, row in df_input.iterrows()
-        ]
+    if st.button("🔍 Look Up & Compare", type="primary", use_container_width=True):
+        valid_rows = df_parsed[df_parsed["parse_ok"]].reset_index(drop=True)
 
         progress_bar = st.progress(0, text="Calling API...")
         status_text  = st.empty()
+        all_results  = []
+        total_valid  = len(valid_rows)
 
-        batch_size  = API_CONFIG["batch_size"]
-        batches     = [drugs[i:i + batch_size] for i in range(0, len(drugs), batch_size)]
-        all_results = []
-        all_errors  = []
+        for i, row in valid_rows.iterrows():
+            status_text.text(f"Processing row {i + 1} of {total_valid}...")
 
-        for i, batch in enumerate(batches):
-            status_text.text(f"Processing batch {i + 1} of {len(batches)}...")
-            results, errors = lookup_alternate_drugs(batch)
-            all_results.extend(results)
-            all_errors.extend(errors)
-            progress_bar.progress((i + 1) / len(batches), text=f"Batch {i+1}/{len(batches)} done")
+            drug = [{
+                "ndc":                   row["requested_ndc"],
+                "dawCode":               row["daw_code"],
+                "substitutionIndicator": row["substitution_indicator"],
+            }]
+
+            results, errors = lookup_alternate_drugs(drug)
+
+            if errors:
+                all_results.append({
+                    "Requested NDC":          row["requested_ndc"],
+                    "DAW Code":               row["daw_code"],
+                    "Drug Source":            row["drug_source"],
+                    "Substitution Indicator": row["substitution_indicator"],
+                    "Log: Expected Alt NDC":  row["log_alternate_ndc"],
+                    "API: Alt NDC":           "",
+                    "API: Alt Drug Name":     "",
+                    "Result":                 "API Error",
+                    "Error Detail":           errors[0].get("error", ""),
+                })
+            elif results:
+                api_alt_ndc  = results[0].get("Alternate Drug NDC", "")
+                api_alt_name = results[0].get("Alternate Drug Name", "")
+                log_alt_ndc  = row["log_alternate_ndc"]
+
+                if not api_alt_ndc:
+                    verdict = "No Alternate"
+                elif api_alt_ndc == log_alt_ndc:
+                    verdict = "Pass"
+                else:
+                    verdict = "Fail"
+
+                all_results.append({
+                    "Requested NDC":          row["requested_ndc"],
+                    "DAW Code":               row["daw_code"],
+                    "Drug Source":            row["drug_source"],
+                    "Substitution Indicator": row["substitution_indicator"],
+                    "Log: Expected Alt NDC":  log_alt_ndc,
+                    "API: Alt NDC":           api_alt_ndc,
+                    "API: Alt Drug Name":     api_alt_name,
+                    "Result":                 verdict,
+                    "Error Detail":           "",
+                })
+
+            progress_bar.progress((i + 1) / total_valid)
 
         progress_bar.empty()
         status_text.empty()
 
-        st.session_state["results"]   = all_results
-        st.session_state["errors"]    = all_errors
-        st.session_state["processed"] = len(all_results)
-        st.session_state["failed"]    = len(all_errors)
+        st.session_state["results"]      = all_results
+        st.session_state["parse_fail"]   = int(parse_fail)
+        st.session_state["total"]        = total
 
 # ── Results section ───────────────────────────────────────────────────────────
-if "results" in st.session_state and (
-    st.session_state["results"] or st.session_state.get("errors")
-):
+if "results" in st.session_state and st.session_state["results"]:
     results = st.session_state["results"]
-    errors  = st.session_state["errors"]
+    df_results = pd.DataFrame(results)
 
     st.divider()
     st.subheader("📊 Results Summary")
 
-    m1, m2, m3, m4 = st.columns(4)
-    sub_yes = sum(1 for r in results if r.get("Substitution Indicator") in ("Y", "G", "X"))
-    sub_no  = sum(1 for r in results if r.get("Substitution Indicator") == "N")
+    r_pass   = (df_results["Result"] == "Pass").sum()
+    r_fail   = (df_results["Result"] == "Fail").sum()
+    r_noalt  = (df_results["Result"] == "No Alternate").sum()
+    r_err    = (df_results["Result"] == "API Error").sum()
+    r_pf     = st.session_state.get("parse_fail", 0)
 
-    m1.metric("✅ Successful Lookups",      st.session_state["processed"])
-    m2.metric("❌ Failed Lookups",          st.session_state["failed"])
-    m3.metric("🔄 Substitution Available",  sub_yes)
-    m4.metric("🚫 No Substitution",         sub_no)
+    m1, m2, m3, m4, m5 = st.columns(5)
+    m1.metric("✅ Pass",          int(r_pass))
+    m2.metric("❌ Fail",          int(r_fail))
+    m3.metric("⚠️ No Alternate",  int(r_noalt))
+    m4.metric("🔴 API Error",     int(r_err))
+    m5.metric("⛔ Parse Failed",  int(r_pf))
 
     st.divider()
 
-    if results:
-        # ── Filters ───────────────────────────────────────────────────────────
-        st.subheader("🔎 Filter Results")
-        f1, f2, f3 = st.columns([2, 2, 2])
+    # ── Filter ────────────────────────────────────────────────────────────────
+    st.subheader("🔎 Filter Results")
+    f1, f2 = st.columns([2, 3])
+    with f1:
+        all_verdicts = sorted(df_results["Result"].unique().tolist())
+        filter_result = st.multiselect("Result", options=all_verdicts, default=all_verdicts)
+    with f2:
+        filter_ndc = st.text_input("Search by Requested NDC", placeholder="leave blank for all")
 
-        with f1:
-            all_indicators = sorted(set(r.get("Substitution Indicator", "") for r in results))
-            filter_sub = st.multiselect(
-                "Substitution Indicator",
-                options=all_indicators,
-                default=all_indicators,
-            )
-        with f2:
-            filter_ndc = st.text_input("Search by Requested NDC", placeholder="leave blank for all")
-        with f3:
-            filter_drug = st.text_input("Search by Drug Name", placeholder="leave blank for all")
+    df_view = df_results.copy()
+    if filter_result:
+        df_view = df_view[df_view["Result"].isin(filter_result)]
+    if filter_ndc.strip():
+        df_view = df_view[
+            df_view["Requested NDC"].str.contains(filter_ndc.strip(), case=False, na=False)
+        ]
 
-        df_results = pd.DataFrame(results)
+    st.divider()
 
-        if filter_sub:
-            df_results = df_results[df_results["Substitution Indicator"].isin(filter_sub)]
-        if filter_ndc.strip():
-            df_results = df_results[
-                df_results["Requested NDC"].str.contains(filter_ndc.strip(), case=False, na=False)
-            ]
-        if filter_drug.strip():
-            df_results = df_results[
-                df_results["Requested Drug Name"].str.contains(filter_drug.strip(), case=False, na=False) |
-                df_results["Alternate Drug Name"].str.contains(filter_drug.strip(), case=False, na=False)
-            ]
+    # ── Results table ─────────────────────────────────────────────────────────
+    st.subheader(f"📋 Comparison Results ({len(df_view)} records)")
 
-        st.divider()
+    def _verdict_badge(val):
+        badge_map = {
+            "Pass":         "badge-pass",
+            "Fail":         "badge-fail",
+            "No Alternate": "badge-noalt",
+            "API Error":    "badge-err",
+        }
+        css = badge_map.get(str(val), "badge-err")
+        return f'<span class="{css}">{val}</span>'
 
-        # ── Results table ─────────────────────────────────────────────────────
-        st.subheader(f"📋 Alternate Drug Results ({len(df_results)} records)")
+    if df_view.empty:
+        st.info("No results match the current filter.")
+    else:
+        df_display = df_view.copy()
+        df_display["Result"] = df_display["Result"].apply(_verdict_badge)
+        cols_order = [
+            "Requested NDC", "DAW Code", "Drug Source", "Substitution Indicator",
+            "Log: Expected Alt NDC", "API: Alt NDC", "API: Alt Drug Name", "Result",
+        ]
+        # Only show Error Detail if there are API errors
+        if (df_view["Result"].str.contains("API Error")).any() or r_err > 0:
+            cols_order.append("Error Detail")
+        df_display = df_display[[c for c in cols_order if c in df_display.columns]]
+        st.write(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
 
-        if df_results.empty:
-            st.info("No results match the current filter.")
-        else:
-            def _badge(val):
-                css_map = {"Y": "badge-Y", "N": "badge-N", "G": "badge-G", "X": "badge-X"}
-                css = css_map.get(str(val).upper(), "badge-X")
-                return f'<span class="{css}">{val}</span>'
+    st.divider()
 
-            df_display = df_results.copy()
-            df_display["Substitution Indicator"] = df_display["Substitution Indicator"].apply(_badge)
-            st.write(df_display.to_html(escape=False, index=False), unsafe_allow_html=True)
+    # ── Export ────────────────────────────────────────────────────────────────
+    st.subheader("📥 Export Results")
+    fname = EXPORT_CONFIG["default_filename"]
+    ex1, ex2 = st.columns(2)
 
-        st.divider()
+    with ex1:
+        csv_data = df_view.to_csv(index=False).encode("utf-8")
+        st.download_button(
+            label="⬇️ Download as CSV",
+            data=csv_data,
+            file_name=f"{fname}.csv",
+            mime="text/csv",
+            use_container_width=True,
+        )
 
-        # ── Export ────────────────────────────────────────────────────────────
-        st.subheader("📥 Export Results")
-        fname = EXPORT_CONFIG["default_filename"]
-        ex1, ex2 = st.columns(2)
-
-        with ex1:
-            csv_data = df_results.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="⬇️ Download as CSV",
-                data=csv_data,
-                file_name=f"{fname}.csv",
-                mime="text/csv",
-                use_container_width=True,
-            )
-
-        with ex2:
-            excel_buffer = io.BytesIO()
-            with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
-                df_results.to_excel(writer, index=False, sheet_name="Alternate Drugs")
-                worksheet = writer.sheets["Alternate Drugs"]
-                for col in worksheet.columns:
-                    worksheet.column_dimensions[col[0].column_letter].width = 28
-                from openpyxl.styles import Font, PatternFill
-                for cell in worksheet[1]:
-                    cell.font = Font(bold=True)
-                    cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
-            st.download_button(
-                label="⬇️ Download as Excel",
-                data=excel_buffer.getvalue(),
-                file_name=f"{fname}.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                use_container_width=True,
-            )
-
-    # ── Errors table ──────────────────────────────────────────────────────────
-    if errors:
-        st.divider()
-        st.subheader("⚠️ Failed Records")
-        st.warning(f"{len(errors)} records could not be processed.")
-        st.dataframe(pd.DataFrame(errors), use_container_width=True)
+    with ex2:
+        excel_buffer = io.BytesIO()
+        with pd.ExcelWriter(excel_buffer, engine="openpyxl") as writer:
+            df_view.to_excel(writer, index=False, sheet_name="Results")
+            ws = writer.sheets["Results"]
+            for col in ws.columns:
+                ws.column_dimensions[col[0].column_letter].width = 26
+            from openpyxl.styles import Font, PatternFill
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+                cell.fill = PatternFill(start_color="D9E1F2", end_color="D9E1F2", fill_type="solid")
+        st.download_button(
+            label="⬇️ Download as Excel",
+            data=excel_buffer.getvalue(),
+            file_name=f"{fname}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
