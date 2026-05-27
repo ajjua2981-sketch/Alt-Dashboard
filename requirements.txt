@@ -1,0 +1,11 @@
+# Streamlit dashboard
+streamlit>=1.37.0
+
+# HTTP requests to REST API
+requests>=2.31.0
+
+# Data manipulation and export
+pandas>=2.0.0
+
+# Excel export
+openpyxl>=3.1.0

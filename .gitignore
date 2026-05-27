@@ -1,0 +1,33 @@
+# Python
+__pycache__/
+*.py[cod]
+.Python
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Sensitive / credentials
+local_config.py
+.env
+*.env
+
+# IDE
+.idea/
+*.iml
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Uploaded files (don't commit user data)
+# sample_input.xlsx and input_template.xlsx are intentionally tracked
+*.csv
+alternate_results*.xlsx
+uploaded_*.xlsx
+
+# Logs
+*.log
