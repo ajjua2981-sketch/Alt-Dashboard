@@ -1,27 +1,25 @@
 """
 log_parser.py — Extracts substitution fields from logTXT entries.
 
-Expected message format (inside a GetClaimsData_ACB entry):
-  GetClaimsData_ACB STEP:8 Original Drug: 00173087410,Drug Source: W,
-  Claim DAW Code: 0 has been switched to CLAIM NDC: 00173087410,...
+Expected message format (found inside the logTXT):
+  Requested NDC: 00002148480 Substituted with Alternate NDC: 00002148401
+  For DAW Code: 0 Drug Source: W Substitution Indicator: B
 """
 
 import json
 import re
 
-# Matches the GetClaimsData_ACB switched-NDC message
 _PATTERN = re.compile(
-    r"GetClaimsData_ACB\s+STEP:\d+\s+"
-    r"Original Drug:\s*(\d+),\s*Drug Source:\s*(\w+),\s*Claim DAW Code:\s*(\S+)\s+"
-    r"has been switched to CLAIM NDC:\s*(\d+)",
+    r"Requested NDC:\s*(\d+)\s+Substituted with Alternate NDC:\s*(\d+)\s+"
+    r"For DAW Code:\s*(\S+)\s+Drug Source:\s*(\S+)\s+Substitution Indicator:\s*(\S+)",
     re.IGNORECASE,
 )
 
 
 def parse_log(log_text: str) -> dict | None:
     """
-    Search log_text for the GetClaimsData_ACB substitution message and return
-    extracted fields. Returns None if the pattern is not found.
+    Search log_text for the substitution message and return extracted fields.
+    Returns None if the pattern is not found.
 
     Handles two formats:
     1. JSON array of {"MessageDesc": "..."} objects
@@ -49,8 +47,9 @@ def parse_log(log_text: str) -> dict | None:
 
 def _to_dict(m: re.Match) -> dict:
     return {
-        "requested_ndc":     m.group(1).strip(),
-        "drug_source":       m.group(2).strip(),
-        "daw_code":          m.group(3).strip(),
-        "log_alternate_ndc": m.group(4).strip(),
+        "requested_ndc":          m.group(1).strip(),
+        "log_alternate_ndc":      m.group(2).strip(),
+        "daw_code":               m.group(3).strip(),
+        "drug_source":            m.group(4).strip(),
+        "substitution_indicator": m.group(5).strip(),
     }
