@@ -67,12 +67,14 @@ with st.sidebar:
 
     # ── Template download ─────────────────────────────────────────────────────
     st.markdown("**Download Input Template**")
-    template_df = pd.DataFrame(columns=["logTXT"])
+    template_df = pd.DataFrame(columns=["Reference ID", "Case ID", "logTXT"])
     template_buffer = io.BytesIO()
     with pd.ExcelWriter(template_buffer, engine="openpyxl") as writer:
         template_df.to_excel(writer, index=False, sheet_name="Input")
         worksheet = writer.sheets["Input"]
-        worksheet.column_dimensions["A"].width = 80
+        worksheet.column_dimensions["A"].width = 20
+        worksheet.column_dimensions["B"].width = 20
+        worksheet.column_dimensions["C"].width = 80
         from openpyxl.styles import Font, PatternFill
         for cell in worksheet[1]:
             cell.font = Font(bold=True)
@@ -100,7 +102,7 @@ st.divider()
 uploaded_file = st.file_uploader(
     "Upload Excel file (.xlsx)",
     type=["xlsx"],
-    help="Excel file must have a single column: 'logTXT'",
+    help="Excel file must have columns: 'Reference ID', 'Case ID', 'logTXT'",
 )
 
 if uploaded_file:
@@ -128,8 +130,15 @@ if uploaded_file:
         )
         st.stop()
 
-    df_input = df_input[["logTXT"]].copy()
-    df_input["logTXT"] = df_input["logTXT"].astype(str).str.strip()
+    # Carry Reference ID and Case ID if present, defaulting to empty string
+    for col in ["Reference ID", "Case ID"]:
+        if col not in df_input.columns:
+            df_input[col] = ""
+
+    df_input = df_input[["Reference ID", "Case ID", "logTXT"]].copy()
+    df_input["Reference ID"] = df_input["Reference ID"].astype(str).str.strip().replace("nan", "")
+    df_input["Case ID"]      = df_input["Case ID"].astype(str).str.strip().replace("nan", "")
+    df_input["logTXT"]       = df_input["logTXT"].astype(str).str.strip()
     df_input = df_input[df_input["logTXT"].str.len() > 0]
     df_input = df_input[df_input["logTXT"] != "nan"].reset_index(drop=True)
 
@@ -141,13 +150,14 @@ if uploaded_file:
     parsed_rows = []
     for _, row in df_input.iterrows():
         result = parse_log(row["logTXT"])
+        base = {"reference_id": row["Reference ID"], "case_id": row["Case ID"], "logTXT": row["logTXT"]}
         if result:
-            parsed_rows.append({**result, "logTXT": row["logTXT"], "parse_ok": True})
+            parsed_rows.append({**result, **base, "parse_ok": True})
         else:
             parsed_rows.append({
                 "requested_ndc": "", "log_alternate_ndc": "",
                 "daw_code": "", "drug_source": "", "substitution_indicator": "",
-                "logTXT": row["logTXT"], "parse_ok": False,
+                **base, "parse_ok": False,
             })
 
     df_parsed = pd.DataFrame(parsed_rows)
@@ -170,8 +180,10 @@ if uploaded_file:
         )
 
     preview_df = df_parsed[df_parsed["parse_ok"]].reset_index(drop=True)[[
-        "requested_ndc", "log_alternate_ndc", "daw_code", "drug_source", "substitution_indicator"
+        "reference_id", "case_id", "requested_ndc", "log_alternate_ndc", "daw_code", "drug_source", "substitution_indicator"
     ]].rename(columns={
+        "reference_id":           "Reference ID",
+        "case_id":                "Case ID",
         "requested_ndc":          "Requested NDC",
         "log_alternate_ndc":      "Log: Expected Alt NDC",
         "daw_code":               "DAW Code",
@@ -205,6 +217,8 @@ if uploaded_file:
 
             if errors:
                 all_results.append({
+                    "Reference ID":           row["reference_id"],
+                    "Case ID":                row["case_id"],
                     "Requested NDC":          row["requested_ndc"],
                     "DAW Code":               row["daw_code"],
                     "Drug Source":            row["drug_source"],
@@ -228,6 +242,8 @@ if uploaded_file:
                     verdict = "Fail"
 
                 all_results.append({
+                    "Reference ID":           row["reference_id"],
+                    "Case ID":                row["case_id"],
                     "Requested NDC":          row["requested_ndc"],
                     "DAW Code":               row["daw_code"],
                     "Drug Source":            row["drug_source"],
@@ -309,6 +325,7 @@ if "results" in st.session_state and st.session_state["results"]:
         df_display = df_view.copy()
         df_display["Result"] = df_display["Result"].apply(_verdict_badge)
         cols_order = [
+            "Reference ID", "Case ID",
             "Requested NDC", "DAW Code", "Drug Source", "Substitution Indicator",
             "Log: Expected Alt NDC", "API: Alt NDC", "API: Alt Drug Name", "Result",
         ]
