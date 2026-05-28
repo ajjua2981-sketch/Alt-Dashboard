@@ -89,7 +89,7 @@ def _call_api(batch: list[dict]) -> tuple[list[dict], list[dict]]:
             proxies=proxies if proxies else None,
         )
         response.raise_for_status()
-        return _parse_xml_response(response.text, batch), []
+        return _parse_xml_response(response.text, batch)
 
     except requests.exceptions.HTTPError as exc:
         error_msg = f"HTTP {exc.response.status_code}: {exc.response.text}"
@@ -144,11 +144,8 @@ def _build_xml_request(batch: list[dict]) -> bytes:
     return tostring(root, encoding="utf-8", xml_declaration=True)
 
 
-def _parse_xml_response(xml_text: str, batch: list[dict]) -> list[dict]:
-    """
-    Parses the XML response into a flat list of result dicts.
-    TODO: Update the NS value below with your real API namespace.
-    """
+def _parse_xml_response(xml_text: str, batch: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Parses the XML response into (results, errors) — always returns both lists."""
     import xml.etree.ElementTree as ET
 
     NS = "http://drugreference.services.esrx.com/drugdetail"
@@ -192,7 +189,7 @@ def _parse_xml_response(xml_text: str, batch: list[dict]) -> list[dict]:
                 "Alternate Drug Name":    alt_name,
             })
 
-        return results
+        return results, []
 
     except ET.ParseError as exc:
         return [], [{"ndc": d["ndc"], "error": f"XML parse error: {exc}"} for d in batch]
