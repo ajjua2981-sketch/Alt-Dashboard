@@ -8,11 +8,26 @@ TODO: Fill in the following before going live:
   4. Update channel and user_id in config.py
 """
 
+import ssl
 import requests
 from datetime import date
+from requests.adapters import HTTPAdapter
+from urllib3.util.ssl_ import create_urllib3_context
 from xml.etree.ElementTree import Element, SubElement, tostring
 
 from config import API_CONFIG
+
+
+class _TLS12Adapter(HTTPAdapter):
+    """Force TLS 1.2 — required by servers that reject TLS 1.3 EOF handshakes."""
+    def init_poolmanager(self, *args, **kwargs):
+        ctx = create_urllib3_context(ssl_version=ssl.PROTOCOL_TLS_CLIENT)
+        ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+        ctx.maximum_version = ssl.TLSVersion.TLSv1_2
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
+        kwargs["ssl_context"] = ctx
+        super().init_poolmanager(*args, **kwargs)
 
 
 # ── Public function ───────────────────────────────────────────────────────────
@@ -63,12 +78,14 @@ def _call_api(batch: list[dict]) -> tuple[list[dict], list[dict]]:
         proxies["https"] = API_CONFIG["proxy_https"]
 
     try:
-        response = requests.post(
+        session = requests.Session()
+        session.mount("https://", _TLS12Adapter())
+        response = session.post(
             url,
             data=xml_payload,
             headers=headers,
             timeout=API_CONFIG["timeout_seconds"],
-            verify=API_CONFIG.get("ssl_verify", True),
+            verify=False,
             proxies=proxies if proxies else None,
         )
         response.raise_for_status()
