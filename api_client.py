@@ -122,7 +122,7 @@ def _build_xml_request(batch: list[dict]) -> bytes:
     sub_indicator = batch[0].get("substitutionIndicator", API_CONFIG["substitution_indicator"])
 
     root = Element("DrugDetailRequest")
-    root.set("xmlns", "http://drugreference.services.esrx.com/drugdetail")
+    root.set("xmlns", API_CONFIG.get("xmlns", ""))
 
     SubElement(root, "TestMode").text           = API_CONFIG["test_mode"]
     SubElement(root, "Channel").text            = API_CONFIG["channel"]
@@ -148,7 +148,7 @@ def _parse_xml_response(xml_text: str, batch: list[dict]) -> tuple[list[dict], l
     """Parses the XML response into (results, errors) — always returns both lists."""
     import xml.etree.ElementTree as ET
 
-    NS = "http://drugreference.services.esrx.com/drugdetail"
+    NS = API_CONFIG.get("xmlns", "")
     ns = f"{{{NS}}}" if NS else ""
 
     daw_lookup = {d["ndc"]: d.get("dawCode", "") for d in batch}

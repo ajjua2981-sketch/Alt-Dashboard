@@ -10,6 +10,10 @@ API_CONFIG = {
     "base_url": "https://your-api-host.com",
     "endpoint": "/your-endpoint-path",
 
+    # XML namespace used in request and response parsing
+    # Replace with your real namespace
+    "xmlns": "http://your-api-host.com/drugdetail",
+
     # API Key — replace with your real key
     # Keep this private — never commit real keys to GitHub
     "api_key": "YOUR-API-KEY-HERE",
