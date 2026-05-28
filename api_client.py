@@ -122,7 +122,7 @@ def _build_xml_request(batch: list[dict]) -> bytes:
     sub_indicator = batch[0].get("substitutionIndicator", API_CONFIG["substitution_indicator"])
 
     root = Element("DrugDetailRequest")
-    root.set("xmlns", "http://your-api-host.com/drugdetail")   # TODO: replace with real xmlns
+    root.set("xmlns", "http://drugreference.services.esrx.com/drugdetail")
 
     SubElement(root, "TestMode").text           = API_CONFIG["test_mode"]
     SubElement(root, "Channel").text            = API_CONFIG["channel"]
@@ -151,7 +151,7 @@ def _parse_xml_response(xml_text: str, batch: list[dict]) -> list[dict]:
     """
     import xml.etree.ElementTree as ET
 
-    NS = "http://your-api-host.com/drugdetail"               # TODO: replace with real namespace
+    NS = "http://drugreference.services.esrx.com/drugdetail"
     ns = f"{{{NS}}}" if NS else ""
 
     daw_lookup = {d["ndc"]: d.get("dawCode", "") for d in batch}
