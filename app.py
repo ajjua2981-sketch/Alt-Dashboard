@@ -11,6 +11,8 @@ from api_client import lookup_alternate_drugs
 from config import API_CONFIG, EXPORT_CONFIG
 from log_parser import parse_log
 
+_DEFAULT_SUB_INDICATOR = API_CONFIG.get("substitution_indicator", "G")
+
 # ── Page config ───────────────────────────────────────────────────────────────
 st.set_page_config(
     page_title="Alternate Drug Dashboard",
@@ -156,7 +158,7 @@ if uploaded_file:
         else:
             parsed_rows.append({
                 "requested_ndc": "", "log_alternate_ndc": "",
-                "daw_code": "", "drug_source": "", "substitution_indicator": "",
+                "daw_code": "", "drug_source": "",
                 **base, "parse_ok": False,
             })
 
@@ -180,15 +182,14 @@ if uploaded_file:
         )
 
     preview_df = df_parsed[df_parsed["parse_ok"]].reset_index(drop=True)[[
-        "reference_id", "case_id", "requested_ndc", "log_alternate_ndc", "daw_code", "drug_source", "substitution_indicator"
+        "reference_id", "case_id", "requested_ndc", "log_alternate_ndc", "daw_code", "drug_source"
     ]].rename(columns={
-        "reference_id":           "Reference ID",
-        "case_id":                "Case ID",
-        "requested_ndc":          "Requested NDC",
-        "log_alternate_ndc":      "Log: Expected Alt NDC",
-        "daw_code":               "DAW Code",
-        "drug_source":            "Drug Source",
-        "substitution_indicator": "Substitution Indicator",
+        "reference_id":      "Reference ID",
+        "case_id":           "Case ID",
+        "requested_ndc":     "Requested NDC",
+        "log_alternate_ndc": "Log: Expected Alt NDC",
+        "daw_code":          "DAW Code",
+        "drug_source":       "Drug Source",
     })
 
     st.dataframe(preview_df, use_container_width=True, height=220)
@@ -210,24 +211,23 @@ if uploaded_file:
             drug = [{
                 "ndc":                   row["requested_ndc"],
                 "dawCode":               row["daw_code"],
-                "substitutionIndicator": row["substitution_indicator"],
+                "substitutionIndicator": _DEFAULT_SUB_INDICATOR,
             }]
 
             results, errors = lookup_alternate_drugs(drug)
 
             if errors:
                 all_results.append({
-                    "Reference ID":           row["reference_id"],
-                    "Case ID":                row["case_id"],
-                    "Requested NDC":          row["requested_ndc"],
-                    "DAW Code":               row["daw_code"],
-                    "Drug Source":            row["drug_source"],
-                    "Substitution Indicator": row["substitution_indicator"],
-                    "Log: Expected Alt NDC":  row["log_alternate_ndc"],
-                    "API: Alt NDC":           "",
-                    "API: Alt Drug Name":     "",
-                    "Result":                 "API Error",
-                    "Error Detail":           errors[0].get("error", ""),
+                    "Reference ID":          row["reference_id"],
+                    "Case ID":               row["case_id"],
+                    "Requested NDC":         row["requested_ndc"],
+                    "DAW Code":              row["daw_code"],
+                    "Drug Source":           row["drug_source"],
+                    "Log: Expected Alt NDC": row["log_alternate_ndc"],
+                    "API: Alt NDC":          "",
+                    "API: Alt Drug Name":    "",
+                    "Result":                "API Error",
+                    "Error Detail":          errors[0].get("error", ""),
                 })
             elif results:
                 api_alt_ndc  = results[0].get("Alternate Drug NDC", "")
@@ -242,17 +242,16 @@ if uploaded_file:
                     verdict = "Fail"
 
                 all_results.append({
-                    "Reference ID":           row["reference_id"],
-                    "Case ID":                row["case_id"],
-                    "Requested NDC":          row["requested_ndc"],
-                    "DAW Code":               row["daw_code"],
-                    "Drug Source":            row["drug_source"],
-                    "Substitution Indicator": row["substitution_indicator"],
-                    "Log: Expected Alt NDC":  log_alt_ndc,
-                    "API: Alt NDC":           api_alt_ndc,
-                    "API: Alt Drug Name":     api_alt_name,
-                    "Result":                 verdict,
-                    "Error Detail":           "",
+                    "Reference ID":          row["reference_id"],
+                    "Case ID":               row["case_id"],
+                    "Requested NDC":         row["requested_ndc"],
+                    "DAW Code":              row["daw_code"],
+                    "Drug Source":           row["drug_source"],
+                    "Log: Expected Alt NDC": log_alt_ndc,
+                    "API: Alt NDC":          api_alt_ndc,
+                    "API: Alt Drug Name":    api_alt_name,
+                    "Result":                verdict,
+                    "Error Detail":          "",
                 })
 
             progress_bar.progress((i + 1) / total_valid)
@@ -326,7 +325,7 @@ if "results" in st.session_state and st.session_state["results"]:
         df_display["Result"] = df_display["Result"].apply(_verdict_badge)
         cols_order = [
             "Reference ID", "Case ID",
-            "Requested NDC", "DAW Code", "Drug Source", "Substitution Indicator",
+            "Requested NDC", "DAW Code", "Drug Source",
             "Log: Expected Alt NDC", "API: Alt NDC", "API: Alt Drug Name", "Result",
         ]
         # Only show Error Detail if there are API errors
